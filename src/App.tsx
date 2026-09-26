@@ -1,6 +1,11 @@
-import type { SubmitEvent, KeyboardEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import type { SubmitEvent, KeyboardEvent, ElementType } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import PhoneInput, {
+  getCountryCallingCode,
+  isValidPhoneNumber,
+  type Country,
+} from "react-phone-number-input";
 import {
   FaLinkedinIn,
   FaXTwitter,
@@ -143,16 +148,160 @@ function findPath(id: string): PathData {
   return PATHS.find((p) => p.id === id) ?? PATHS[0];
 }
 
-function formatPhone(v: string): string {
-  let d = v.replace(/\D/g, "");
-  if (d.charAt(0) === "0") d = d.slice(1);
-  if (d.slice(0, 3) === "234") d = d.slice(3);
-  d = d.slice(0, 10);
-  return d.length > 6
-    ? d.slice(0, 3) + " " + d.slice(3, 6) + " " + d.slice(6)
-    : d.length > 3
-      ? d.slice(0, 3) + " " + d.slice(3)
-      : d;
+interface CountryOption {
+  value?: string;
+  label: string;
+  divider?: boolean;
+}
+
+interface CountryCodeSelectProps {
+  value?: string;
+  options: CountryOption[];
+  onChange: (value?: string) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  disabled?: boolean;
+  readOnly?: boolean;
+  name?: string;
+  iconComponent?: ElementType;
+  "aria-label"?: string;
+}
+
+function CountryCodeSelect({
+  value,
+  options,
+  onChange,
+  onFocus,
+  onBlur,
+  disabled,
+  readOnly,
+  iconComponent: Icon,
+  "aria-label": ariaLabel,
+}: CountryCodeSelectProps) {
+  const callingCode = (country?: string) =>
+    country ? "+" + getCountryCallingCode(country as Country) : "";
+  const selected = options.find((o) => !o.divider && o.value === value);
+
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const [dropUp, setDropUp] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listId = useId();
+
+  const activeValue =
+    options[active] && !options[active].divider ? options[active].value : undefined;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocDown);
+    return () => document.removeEventListener("mousedown", onDocDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const node = listRef.current?.children[active] as HTMLElement | undefined;
+    node?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  const openList = () => {
+    const idx = options.findIndex((o) => !o.divider && o.value === value);
+    if (idx >= 0) setActive(idx);
+    const r = rootRef.current?.getBoundingClientRect();
+    if (r) setDropUp(r.bottom + 250 > window.innerHeight && r.top > 250);
+    setOpen(true);
+  };
+
+  const pick = (v?: string) => {
+    onChange(v);
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const last = options.length - 1;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) {
+        openList();
+        return;
+      }
+      setActive((i) => (e.key === "ArrowDown" ? Math.min(i + 1, last) : Math.max(i - 1, 0)));
+    } else if (!open && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      openList();
+    } else if (open && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      pick(activeValue);
+    } else if (open && (e.key === "Home" || e.key === "End")) {
+      e.preventDefault();
+      setActive(e.key === "Home" ? 0 : last);
+    } else if (open && e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+    } else if (open && e.key === "Tab") {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div
+      className={"cc" + (open ? " open" : "") + (dropUp ? " up" : "")}
+      ref={rootRef}
+    >
+      <button
+        type="button"
+        className="cc-trigger"
+        ref={triggerRef}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open ? listId + "-o" + active : undefined}
+        aria-label={ariaLabel}
+        disabled={disabled || readOnly}
+        onClick={() => (open ? setOpen(false) : openList())}
+        onKeyDown={onKeyDown}
+        onFocus={onFocus}
+        onBlur={onBlur}
+      >
+        {Icon ? (
+          <Icon country={value} label={selected ? selected.label : ""} />
+        ) : null}
+        <span className="cc-code">{value ? callingCode(value) : "Intl"}</span>
+        <svg className="cc-caret" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      {open ? (
+        <ul className="cc-list" role="listbox" aria-label={ariaLabel} id={listId} ref={listRef}>
+          {options.map((o, i) =>
+            o.divider ? (
+              <li className="cc-div" key="div" role="presentation" />
+            ) : (
+              <li
+                className={"cc-opt" + (o.value === value ? " on" : "")}
+                key={o.value}
+                id={listId + "-o" + i}
+                role="option"
+                aria-selected={o.value === value}
+                data-active={i === active}
+                onMouseEnter={() => setActive(i)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pick(o.value)}
+              >
+                <span className="cc-opt-name">{o.label}</span>
+                <span className="cc-opt-code">{callingCode(o.value)}</span>
+              </li>
+            )
+          )}
+        </ul>
+      ) : null}
+    </div>
+  );
 }
 
 interface ConfettiPiece {
@@ -273,9 +422,11 @@ export default function App() {
           ? ""
           : "Enter your full name so we know who to contact.";
       case "phone":
-        return phone.replace(/\D/g, "").length === 10
+        if (phone.trim() === "")
+          return "Enter your number so we know where to reach you.";
+        return isValidPhoneNumber(phone)
           ? ""
-          : "Enter your 10-digit number, like 801 234 5678.";
+          : "That number is not valid yet. Check the digits you typed.";
       case "email":
         return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim())
           ? ""
@@ -353,7 +504,7 @@ export default function App() {
 
     const fd = new FormData();
     fd.append("fullName", name.trim());
-    fd.append("phone", "+234" + phone.replace(/\D/g, ""));
+    fd.append("phone", phone);
     fd.append("email", email.trim().toLowerCase());
     fd.append("course", course);
 
@@ -440,9 +591,7 @@ export default function App() {
               </motion.h1>
               <motion.p className="lede" {...reveal(0.14)}>
                 TFN Academy trains young Nigerians in tech and business the way
-                the work actually happens: <b>one graded project every week</b>,
-                three sessions a week, for fourteen weeks. You leave with a
-                portfolio, not a certificate you have to explain.
+                the work actually happens.
               </motion.p>
               <motion.div className="act" {...reveal(0.24)}>
                 <a className="btn" href="#join" id="top-cta">
@@ -460,12 +609,21 @@ export default function App() {
 
             <motion.div className="lead-shot" {...reveal(0.18)}>
               <img src={leadShot} alt="" width={640} height={640} />
-              <div className="stat">
-                <b>Six days a week</b>
-                <span>
-                  Mon&ndash;Sat, three batches a day. Built around a working
-                  schedule.
-                </span>
+              <div className="stats">
+                <div className="stat">
+                  <b>Six days a week</b>
+                  <span>
+                    Mon&ndash;Sat, three batches a day. Built around a working
+                    schedule.
+                  </span>
+                </div>
+                <div className="stat">
+                  <b>One graded project per week</b>
+                  <span>
+                    Three sessions a week, for fourteen weeks. You leave with a
+                    portfolio, not a certificate you have to explain.
+                  </span>
+                </div>
               </div>
             </motion.div>
           </div>
@@ -543,37 +701,39 @@ export default function App() {
           </div>
         </section>
 
-        <section className="facts wrap">
-          <ul>
-            <li>
-              <b>14 weeks</b>
-              <span>Mon/Wed/Fri or Tue/Thu/Sat, 2.5 hours a session</span>
-            </li>
-            <li>
-              <b>3 batches</b>
-              <span>
-                Morning, afternoon or evening &mdash; pick what fits your life
-              </span>
-            </li>
-            <li>
-              <b>28 seats</b>
-              <span>
-                Per class, so instructors know your name and your work
-              </span>
-            </li>
-            <li>
-              <b>~12.5 hrs</b>
-              <span>A week in total, class time plus your own practice</span>
-            </li>
-          </ul>
-          <p className="certs">
-            <b>
-              Every path maps to certifications employers already recognise:
-            </b>{" "}
-            AWS &middot; CompTIA Security+ &middot; Cisco CCNA &middot; Google
-            Data Analytics &middot; Microsoft PL-300 &middot; Meta Front-End
-            &middot; Scrum.org PSPO
-          </p>
+        <section className="facts">
+          <div className="wrap">
+            <ul>
+              <li>
+                <b>14 weeks</b>
+                <span>Mon/Wed/Fri or Tue/Thu/Sat, 2.5 hours a session</span>
+              </li>
+              <li>
+                <b>3 batches</b>
+                <span>
+                  Morning, afternoon or evening &mdash; pick what fits your life
+                </span>
+              </li>
+              <li>
+                <b>28 seats</b>
+                <span>
+                  Per class, so instructors know your name and your work
+                </span>
+              </li>
+              <li>
+                <b>~12.5 hrs</b>
+                <span>A week in total, class time plus your own practice</span>
+              </li>
+            </ul>
+            <p className="certs">
+              <b>
+                Every path maps to certifications employers already recognise:
+              </b>{" "}
+              AWS &middot; CompTIA Security+ &middot; Cisco CCNA &middot; Google
+              Data Analytics &middot; Microsoft PL-300 &middot; Meta Front-End
+              &middot; Scrum.org PSPO
+            </p>
+          </div>
         </section>
 
         <section className="join" id="join" ref={joinRef}>
@@ -581,7 +741,7 @@ export default function App() {
             <div>
               <h2>Cohort 1 opens before it opens to everyone.</h2>
               <p className="sub">
-                Join the waitlist and we email you the start dates, fees and
+                Join the waitlist and we email you the start dates and
                 application link first &mdash; while there are still seats in
                 your batch.
               </p>
@@ -596,7 +756,7 @@ export default function App() {
                 <li>
                   <span className="n">2</span>
                   <span>
-                    <b>We email you first</b> with start dates, fees and the
+                    <b>We email you first</b> with start dates and the
                     application link.
                   </span>
                 </li>
@@ -658,23 +818,23 @@ export default function App() {
 
                   <div
                     className={
-                      "f tel" +
+                      "f f-phone" +
                       (phone.trim() !== "" ? " filled" : "") +
                       (errors.phone ? " bad" : "")
                     }
                     id="f-phone"
                   >
-                    <span className="pre">+234</span>
-                    <input
+                    <PhoneInput
+                      international={false}
+                      addInternationalOption={false}
+                      defaultCountry="NG"
+                      countrySelectComponent={CountryCodeSelect}
                       id="phone"
-                      type="tel"
-                      inputMode="numeric"
-                      autoComplete="tel"
-                      placeholder=" "
+                      autoComplete="tel-national"
                       required
                       value={phone}
-                      onChange={(e) => {
-                        setPhone(formatPhone(e.target.value));
+                      onChange={(v) => {
+                        setPhone(v || "");
                         clearErr("phone");
                       }}
                       onBlur={() => validateField("phone")}
@@ -842,10 +1002,10 @@ export default function App() {
                         aria-label="Share on LinkedIn"
                         target="_blank"
                         rel="noopener"
-href={
-                        "https://www.linkedin.com/sharing/share-offsite/?url=" +
-                        encodeURIComponent(formLink)
-                      }
+                        href={
+                          "https://www.linkedin.com/sharing/share-offsite/?url=" +
+                          encodeURIComponent(formLink)
+                        }
                       >
                         <FaLinkedinIn aria-hidden="true" />
                       </a>
@@ -868,10 +1028,10 @@ href={
                         aria-label="Share on Facebook"
                         target="_blank"
                         rel="noopener"
-href={
-                        "https://www.facebook.com/sharer/sharer.php?u=" +
-                        encodeURIComponent(formLink)
-                      }
+                        href={
+                          "https://www.facebook.com/sharer/sharer.php?u=" +
+                          encodeURIComponent(formLink)
+                        }
                       >
                         <FaFacebookF aria-hidden="true" />
                       </a>
@@ -917,12 +1077,10 @@ href={
       <footer className="foot">
         <div className="wrap">
           <a href="https://academy.tfnsolutions.us">academy.tfnsolutions.us</a>
-          <a href="mailto:info@tfnacademy.ng">info@tfnacademy.ng</a>
+          <a href="mailto:academy@tfnsolutions.us">academy@tfnsolutions.us</a>
           <span className="end">
             TFN Academy, a{" "}
-            <a href="https://tfnsolutions.us">
-              TurboFlux Network Solutions
-            </a>{" "}
+            <a href="https://tfnsolutions.us">TurboFlux Network Solutions</a>{" "}
             company
           </span>
         </div>
